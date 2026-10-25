@@ -1,0 +1,152 @@
+Metadata-Version: 2.4
+Name: chatbot-app
+Version: 1.0.0
+Summary: FastAPI chat application with OpenAI and Gemini providers
+Author: Copilot
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+
+# chatapi_app
+
+FastAPI chat application with OpenAI and Gemini providers. Each conversation uses one
+provider, preserves provider-specific context, and stores saved history locally as JSON.
+
+## Project structure
+
+```text
+chatbot_app_v2/
+├─ .env
+├─ .gitignore
+├─ README.md
+├─ app.py
+├─ main.py
+├─ requirements.txt
+├─ src/                         # canonical production package
+│  ├─ __init__.py
+│  ├─ api/
+│  │  ├─ __init__.py
+│  │  ├─ controller/
+│  │  │  ├─ __init__.py
+│  │  │  └─ chat.py              # FastAPI routes and request orchestration
+│  │  └─ service/
+│  │     ├─ __init__.py
+│  │     ├─ client_factory.py     # provider-client factory and common response contract
+│  │     ├─ openai_client.py      # OpenAI adapter
+│  │     └─ gemini_client.py      # Gemini adapter
+│  ├─ config/
+│  │  ├─ __init__.py
+│  │  ├─ app_config.py           # FastAPI metadata
+│  │  ├─ env_config.py           # root/views/logs/conversation path config
+│  │  ├─ logging_config.py       # console + rotating file logging setup
+│  │  ├─ model_config.py         # provider-to-model mapping
+│  │  └─ settings.py             # env-backed API keys and blocked-term settings
+│  ├─ constants/
+│  │  ├─ __init__.py
+│  │  ├─ app_constants.py        # app constants, safety instruction, length limits
+│  │  └─ models.py               # model dictionary
+│  ├─ enums/
+│  │  ├─ __init__.py
+│  │  ├─ error_codes.py          # stable app error codes
+│  │  └─ provider_enum.py        # supported provider enum
+│  ├─ exceptions/
+│  │  ├─ __init__.py
+│  │  └─ custom_exception.py     # application exception wrapper
+│  └─ utils/
+│     ├─ __init__.py
+│     ├─ conversation_store.py    # JSON persistence helper for saved conversations
+│     └─ input_sanitizer.py       # normalization + prompt-injection and profanity validation
+├─ data/                         # runtime-generated app data (ignored in Git)
+│  └─ gemini_conversations.json  # saved local conversation history
+├─ logs/                        # rotating application logs (ignored in Git)
+├─ views/
+│  └─ index.html                # single-page chat UI
+├─ tests/
+│  ├─ test_chat_api.py
+│  ├─ test_input_sanitizer.py
+│  └─ manual/
+└─ notebook/
+```
+
+## Request flow and sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Browser
+    participant FastAPI as FastAPI app
+    participant Controller as src.api.controller.chat
+    participant Sanitizer as src.utils.input_sanitizer
+    participant Store as src.utils.conversation_store
+    participant Factory as src.api.service.client_factory
+    participant Provider as OpenAI / Gemini
+
+    Browser->>FastAPI: GET / or POST /api/conversations
+    FastAPI->>Controller: route request
+    Controller->>Sanitizer: sanitize_message / sanitize_verification_claim
+    Sanitizer-->>Controller: normalized input or validation error
+
+    alt New chat or new message
+        Controller->>Store: load_store()
+        Store-->>Controller: conversation map
+        Controller->>Factory: create_client(provider)
+        Factory->>Provider: respond(prompt, previous_interaction_id)
+        Provider-->>Factory: interaction id + model reply
+        Factory-->>Controller: ClientResponse
+        Controller->>Store: save_store(updated history)
+        Store-->>Controller: confirm write
+        Controller-->>Browser: JSON response with answer and metadata
+    else Verify claim against history
+        Controller->>Store: load_store()
+        Store-->>Controller: conversation record
+        Controller->>Factory: create_client(provider)
+        Factory->>Provider: verify prompt with prior interaction id
+        Provider-->>Factory: interaction id + evidence-based answer
+        Factory-->>Controller: ClientResponse
+        Controller->>Store: save_store(updated history)
+        Controller-->>Browser: verification response
+    end
+```
+
+## Setup
+
+Create a virtual environment, install the project in editable mode, and install runtime dependencies:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e .
+pip install -r requirements.txt
+```
+
+Set provider keys in the project root `.env` file. Add only the provider keys you plan to use:
+
+```env
+GEMINI_API_KEY=your_gemini_api_key
+OPENAI_API_KEY=your_openai_api_key
+```
+
+The `.env` file is ignored by Git. Do not commit API keys.
+
+## Run
+
+From the project root:
+
+```powershell
+python main.py --reload
+```
+
+Open <http://127.0.0.1:8000> in a browser. Select a provider for a new chat. The UI includes
+separate views for the current conversation, saved history, and checking a claim against the
+selected conversation. Use New chat to create a new conversation thread.
+
+Messages and verification claims are normalized and validated before they reach a provider.
+The app rejects blocked profanity terms and common instruction-override patterns. Set
+`CHAT_BLOCKED_TERMS` to a comma-separated list to override the default profanity terms. This is a
+lightweight input filter, not a full content-moderation or prompt-injection prevention system.
+
+Saved conversations are written to the ignored `data/gemini_conversations.json` file. Rotating
+application logs are written under the ignored `logs/` directory. The runtime-data folder is kept
+separate from source files so generated state does not crowd the project root. The legacy
+`uvicorn app:app --reload` command remains supported for compatibility with older workflows.
+Older standalone demos are kept under `tests/manual/`.
